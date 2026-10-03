@@ -1,6 +1,6 @@
 # Havoc City
 
-A polished, top-down open-world action playground built with plain HTML, CSS, and Canvas JavaScript.
+A polished 3D open-world action playground built with HTML, CSS, JavaScript, WebGL, and Three.js.
 
 ## Play
 
@@ -19,4 +19,4 @@ Then visit <http://localhost:4173>.
 - **E** — talk to nearby NPCs, enter vehicles, or exit a vehicle
 - **Space** — attack and destroy nearby scenery
 
-Havoc City includes twelve usable vehicles across cars, bikes, a skateboard, planes, and boats; six interactive NPCs; a destruction and wanted-level system; a mission; a live minimap; and responsive UI.
+Havoc City includes a third-person perspective camera, a fully modeled 3D city, twelve usable vehicles across cars, bikes, a skateboard, planes, and boats; six interactive NPCs; physics-driven destruction debris; a wanted-level system; a mission; a live minimap; dynamic lighting and shadows; and responsive UI.
