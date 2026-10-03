@@ -28,6 +28,8 @@
   const debris = [];
   const vehicles = [];
   const npcs = [];
+  const smokeParticles = [];
+  const waterRipples = [];
   let started = false;
   let damage = 0;
   let cash = 12840;
@@ -77,11 +79,16 @@
     }
   });
 
-  const water = box(500, 0.6, 42, new THREE.MeshPhysicalMaterial({
-    color: 0x1e8195, roughness: 0.2, metalness: 0.1, transparent: true, opacity: 0.82
+  const waterGeometry = new THREE.PlaneGeometry(500, 42, 80, 10);
+  waterGeometry.rotateX(-Math.PI / 2);
+  const water = new THREE.Mesh(waterGeometry, new THREE.MeshPhysicalMaterial({
+    color: 0x168aa5, roughness: 0.12, metalness: 0.18, transparent: true,
+    opacity: 0.82, transmission: 0.08, clearcoat: 0.7
   }));
-  water.position.set(0, 0, -183);
+  water.position.set(0, 0.35, -183);
+  water.receiveShadow = true;
   scene.add(water);
+  const baseWaterPositions = Float32Array.from(waterGeometry.attributes.position.array);
 
   const buildingLots = [
     [-220,-145,45,42],[-92,-148,78,38],[90,-148,95,39],[222,-148,42,38],
@@ -147,10 +154,12 @@
     if (type === 'plane') { width = 16; length = 13; }
     if (type === 'boat') { width = 5; length = 12; }
 
+    const wheels = [];
     if (type === 'plane') {
       const fuselage = box(2.8, 2.4, length, paint); fuselage.position.y = 2.6; group.add(fuselage);
       const wing = box(width, 0.45, 3.2, paint); wing.position.y = 2.5; group.add(wing);
       const tail = box(5.5, 0.4, 2, paint); tail.position.set(0, 3, 5); group.add(tail);
+      const propeller = box(5, 0.25, 0.3, dark); propeller.position.set(0, 2.6, -length / 2 - .4); propeller.name = 'propeller'; group.add(propeller);
     } else if (type === 'boat') {
       const hull = box(width, 2, length, paint); hull.position.y = 1.2; group.add(hull);
       const cabin = box(width * 0.65, 2, 4, dark); cabin.position.set(0, 3, 1); group.add(cabin);
@@ -161,18 +170,24 @@
       if (type === 'car') {
         const cabin = box(width * 0.78, 1.7, length * 0.45, dark); cabin.position.set(0, 2.9, 0.5); group.add(cabin);
       }
-      const wheels = type === 'bike' ? [[0,0,-1.8],[0,0,1.8]] : [[-width*.45,0,-length*.32],[width*.45,0,-length*.32],[-width*.45,0,length*.32],[width*.45,0,length*.32]];
-      wheels.forEach(([wx,,wz]) => {
+      const wheelPoints = type === 'bike' ? [[0,0,-1.8],[0,0,1.8]] : [[-width*.45,0,-length*.32],[width*.45,0,-length*.32],[-width*.45,0,length*.32],[width*.45,0,length*.32]];
+      wheelPoints.forEach(([wx,,wz]) => {
         const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.72, 0.5, 12), dark);
         wheel.rotation.z = Math.PI / 2;
         wheel.position.set(wx, 0.75, wz);
         wheel.castShadow = true;
         group.add(wheel);
+        wheels.push(wheel);
       });
+      if (type === 'car') {
+        const glass = new THREE.MeshPhysicalMaterial({ color: 0x82aaba, roughness: .12, metalness: .25, transparent: true, opacity: .72 });
+        const windshield = box(width * .7, 1.2, .18, glass); windshield.position.set(0, 3, -length * .23); windshield.rotation.x = -.25; group.add(windshield);
+        [-1, 1].forEach(side => { const lamp = box(.75, .45, .15, mat(0xfff4bd, .2)); lamp.position.set(side * width * .3, 1.65, -length / 2 - .08); group.add(lamp); });
+      }
     }
     group.position.set(x, 0, z);
     group.rotation.y = rotation;
-    group.userData = { name, type, speed: 0, maxSpeed: type === 'plane' ? 72 : type === 'skateboard' ? 34 : type === 'bike' ? 52 : 46 };
+    group.userData = { name, type, speed: 0, wheels, smokeTimer: 0, maxSpeed: type === 'plane' ? 72 : type === 'skateboard' ? 34 : type === 'bike' ? 52 : 46 };
     vehicles.push(group);
     scene.add(group);
   }
@@ -186,28 +201,76 @@
     ['City Bus','car',0xb6c0c2,-205,114], ['Neon Coupe','car',0x985bff,58,127]
   ].forEach((v, i) => createVehicle(...v, (i % 4) * Math.PI / 2));
 
-  function createNPC(name, role, line, color, x, z) {
+  function createFaceTexture(skin, hair, eye) {
+    const faceCanvas = document.createElement('canvas');
+    faceCanvas.width = faceCanvas.height = 128;
+    const face = faceCanvas.getContext('2d');
+    const texture = new THREE.CanvasTexture(faceCanvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return { faceCanvas, face, texture, skin, hair, eye, blink: 0, mouth: 0, lastPaint: -1 };
+  }
+
+  function paintFace(state) {
+    const { face, skin, hair, eye } = state;
+    face.fillStyle = skin; face.fillRect(0, 0, 128, 128);
+    face.fillStyle = hair; face.fillRect(0, 0, 128, 28);
+    face.beginPath(); face.arc(20, 25, 24, 0, Math.PI * 2); face.arc(108, 25, 24, 0, Math.PI * 2); face.fill();
+    face.fillStyle = '#3d241c'; face.fillRect(28, 50, 25, 4); face.fillRect(75, 50, 25, 4);
+    const eyeHeight = state.blink > .72 ? 2 : 12;
+    face.fillStyle = '#fff'; face.fillRect(31, 56, 20, eyeHeight); face.fillRect(77, 56, 20, eyeHeight);
+    face.fillStyle = eye; face.fillRect(39, 57, 7, eyeHeight); face.fillRect(82, 57, 7, eyeHeight);
+    face.fillStyle = '#8b4b45';
+    face.beginPath(); face.ellipse(64, 94, 15, 3 + state.mouth * 7, 0, 0, Math.PI * 2); face.fill();
+    state.texture.needsUpdate = true;
+  }
+
+  function createCharacter(name, color, skin = '#c98967', hair = '#241713', eye = '#293b38') {
     const group = new THREE.Group();
-    const body = box(1.4, 3.2, 1, mat(color)); body.position.y = 2.5; group.add(body);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.72, 16, 10), mat(0xd39b78));
-    head.position.y = 4.7; head.castShadow = true; group.add(head);
+    const body = box(1.55, 2.5, .8, mat(color)); body.position.y = 3.25; group.add(body);
+    const faceState = createFaceTexture(skin, hair, eye); paintFace(faceState);
+    const headMaterials = [mat(skin), mat(skin), mat(hair), mat(skin), new THREE.MeshStandardMaterial({ map: faceState.texture }), mat(skin)];
+    const head = new THREE.Mesh(new THREE.BoxGeometry(1.35, 1.5, 1.15), headMaterials);
+    head.position.set(0, 5.25, -.05); head.castShadow = true; group.add(head);
+    const limbMat = mat(color, .85);
+    const leftArm = box(.42, 2.4, .45, limbMat); leftArm.position.set(-1, 3.25, 0); group.add(leftArm);
+    const rightArm = box(.42, 2.4, .45, limbMat); rightArm.position.set(1, 3.25, 0); group.add(rightArm);
+    const leftLeg = box(.55, 2.6, .62, mat(0x202934)); leftLeg.position.set(-.43, 1.35, 0); group.add(leftLeg);
+    const rightLeg = box(.55, 2.6, .62, mat(0x202934)); rightLeg.position.set(.43, 1.35, 0); group.add(rightLeg);
+    group.userData.rig = { head, leftArm, rightArm, leftLeg, rightLeg, faceState, phase: Math.random() * 10, name };
+    return group;
+  }
+
+  function animateCharacter(character, time, movement, talking = false) {
+    const rig = character.userData.rig;
+    if (!rig) return;
+    const stride = Math.sin(time * 8 + rig.phase) * Math.min(1, movement) * .65;
+    rig.leftArm.rotation.x = stride; rig.rightArm.rotation.x = -stride;
+    rig.leftLeg.rotation.x = -stride; rig.rightLeg.rotation.x = stride;
+    rig.head.rotation.y = Math.sin(time * .8 + rig.phase) * .12;
+    rig.faceState.blink = (time * .55 + rig.phase) % 3;
+    rig.faceState.mouth = talking ? Math.abs(Math.sin(time * 9)) : .12 + Math.abs(Math.sin(time * 1.4)) * .08;
+    if (time - rig.faceState.lastPaint > .08) {
+      paintFace(rig.faceState);
+      rig.faceState.lastPaint = time;
+    }
+  }
+
+  function createNPC(name, role, line, color, x, z, skin, hair, eye) {
+    const group = createCharacter(name, color, skin, hair, eye);
     group.position.set(x, 0, z);
-    group.userData = { name, role, line, color, direction: Math.random() * Math.PI * 2, timer: 0 };
+    Object.assign(group.userData, { name, role, line, color, direction: Math.random() * Math.PI * 2, timer: 0 });
     npcs.push(group); scene.add(group);
   }
   [
-    ['Rico','Street mechanic','Anything with an engine is yours if you can get to it.',0xff3c7d,-136,8],
-    ['Maya','Fixer','Make enough noise and I have a real job for you.',0x42e8ff,9,92],
-    ['Jax','Local legend','Boats are at the canal. Aircraft are by the east hangar.',0xd9ff43,165,-14],
-    ['Nia','Skater','That deck is faster than it looks. Hit boost.',0x985bff,-12,110],
-    ['Officer Vale','Off duty','Keep the heat low, unless you enjoy company.',0xff9f32,-162,42],
-    ['Bo','Vendor','Come back after the job. I will have something special.',0x65db88,145,109]
+    ['Rico','Street mechanic','Anything with an engine is yours if you can get to it.',0xff3c7d,-136,8,'#a96645','#171313','#473421'],
+    ['Maya','Fixer','Make enough noise and I have a real job for you.',0x42e8ff,9,92,'#6f412f','#16100e','#241d19'],
+    ['Jax','Local legend','Boats are at the canal. Aircraft are by the east hangar.',0xd9ff43,165,-14,'#d79b72','#5e311a','#315851'],
+    ['Nia','Skater','That deck is faster than it looks. Hit boost.',0x985bff,-12,110,'#b87356','#29182b','#322c55'],
+    ['Officer Vale','Off duty','Keep the heat low, unless you enjoy company.',0xff9f32,-162,42,'#e1aa82','#c49b70','#365967'],
+    ['Bo','Vendor','Come back after the job. I will have something special.',0x65db88,145,109,'#8c583e','#0f1711','#302418']
   ].forEach(args => createNPC(...args));
 
-  const player = new THREE.Group();
-  const playerBody = box(1.8, 3.2, 1.4, mat(0xd9ff43)); playerBody.position.y = 2.4; player.add(playerBody);
-  const playerHead = new THREE.Mesh(new THREE.SphereGeometry(0.82, 16, 10), mat(0xb6785c));
-  playerHead.position.y = 4.7; playerHead.castShadow = true; player.add(playerHead);
+  const player = createCharacter('Player', 0xd9ff43, '#ad6d50', '#15100e', '#334f43');
   player.position.set(-110, 0, 4);
   scene.add(player);
 
@@ -307,8 +370,62 @@
     minimap.fillStyle = '#d9ff43'; minimap.beginPath(); minimap.arc((actor.position.x+250)*.44, (actor.position.z+200)*.55, 5, 0, Math.PI*2); minimap.fill();
   }
 
+  function emitSmoke(vehicle, dt) {
+    const data = vehicle.userData;
+    data.smokeTimer -= dt;
+    if (data.smokeTimer > 0 || Math.abs(data.speed) < 3 || data.type === 'skateboard') return;
+    data.smokeTimer = data.type === 'boat' ? .08 : .16;
+    const isBoat = data.type === 'boat';
+    const puff = new THREE.Mesh(
+      new THREE.SphereGeometry(isBoat ? .5 : .35, 7, 5),
+      new THREE.MeshBasicMaterial({ color: isBoat ? 0xc5f4ff : 0x687277, transparent: true, opacity: isBoat ? .65 : .5, depthWrite: false })
+    );
+    puff.position.set(0, isBoat ? .5 : 1.2, isBoat ? 6.5 : 4.7).applyMatrix4(vehicle.matrixWorld);
+    puff.userData = { life: isBoat ? 1.4 : 2, velocity: new THREE.Vector3((Math.random()-.5)*.5, isBoat ? .2 : 1.1, (Math.random()-.5)*.5) };
+    smokeParticles.push(puff); scene.add(puff);
+    if (isBoat) createRipple(vehicle.position.x, vehicle.position.z + 4);
+  }
+
+  function createRipple(x, z) {
+    const ripple = new THREE.Mesh(
+      new THREE.RingGeometry(.6, .85, 24),
+      new THREE.MeshBasicMaterial({ color: 0xcaf7ff, transparent: true, opacity: .75, side: THREE.DoubleSide, depthWrite: false })
+    );
+    ripple.rotation.x = -Math.PI / 2;
+    ripple.position.set(x, .72, z);
+    ripple.userData.life = 1.5;
+    waterRipples.push(ripple); scene.add(ripple);
+  }
+
+  function updateEffects(dt, time) {
+    const waterPosition = waterGeometry.attributes.position;
+    for (let i = 0; i < waterPosition.count; i++) {
+      const offset = i * 3;
+      const x = baseWaterPositions[offset];
+      const z = baseWaterPositions[offset + 2];
+      waterPosition.setY(i, baseWaterPositions[offset + 1] + Math.sin(x * .07 + time * 2.2) * .38 + Math.cos(z * .32 + time * 1.5) * .18);
+    }
+    waterPosition.needsUpdate = true;
+    for (let i = smokeParticles.length - 1; i >= 0; i--) {
+      const puff = smokeParticles[i];
+      puff.position.addScaledVector(puff.userData.velocity, dt);
+      puff.scale.addScalar(dt * .9);
+      puff.userData.life -= dt;
+      puff.material.opacity = Math.max(0, puff.userData.life * .28);
+      if (puff.userData.life <= 0) { scene.remove(puff); puff.geometry.dispose(); puff.material.dispose(); smokeParticles.splice(i, 1); }
+    }
+    for (let i = waterRipples.length - 1; i >= 0; i--) {
+      const ripple = waterRipples[i];
+      ripple.scale.addScalar(dt * 5);
+      ripple.userData.life -= dt;
+      ripple.material.opacity = Math.max(0, ripple.userData.life * .45);
+      if (ripple.userData.life <= 0) { scene.remove(ripple); ripple.geometry.dispose(); ripple.material.dispose(); waterRipples.splice(i, 1); }
+    }
+  }
+
   function update(dt) {
     if (!started) return;
+    const time = clock.elapsedTime;
     const forward = (keys.w ? 1 : 0) - (keys.s ? 1 : 0);
     const turn = (keys.a ? 1 : 0) - (keys.d ? 1 : 0);
     let actor = player;
@@ -319,6 +436,13 @@
       data.speed = THREE.MathUtils.clamp(data.speed, -data.maxSpeed * .35, data.maxSpeed);
       actor.rotation.y += turn * dt * 1.65 * (data.speed >= 0 ? 1 : -1);
       actor.translateZ(-data.speed * dt);
+      data.wheels.forEach((wheel, index) => {
+        wheel.rotation.x -= data.speed * dt * 1.35;
+        if (index < 2 && data.type === 'car') wheel.rotation.y = -turn * .35;
+      });
+      const propeller = actor.getObjectByName('propeller');
+      if (propeller) propeller.rotation.z += dt * (8 + Math.abs(data.speed));
+      emitSmoke(actor, dt);
       if (data.type === 'plane' && Math.abs(data.speed) > 38) actor.position.y = THREE.MathUtils.lerp(actor.position.y, keys.shift ? 34 : 16, dt * 1.2);
       else if (data.type !== 'plane') actor.position.y = 0;
     } else {
@@ -329,6 +453,7 @@
         player.position.addScaledVector(move, dt * (keys.shift ? 28 : 17));
         player.rotation.y = Math.atan2(-move.x, -move.z);
       }
+      animateCharacter(player, time, move.lengthSq() ? 1 : 0);
     }
     actor.position.x = THREE.MathUtils.clamp(actor.position.x, -245, 245);
     actor.position.z = THREE.MathUtils.clamp(actor.position.z, -195, 195);
@@ -338,6 +463,8 @@
       if (npc.userData.timer < 0) { npc.userData.timer = 2 + Math.random() * 4; npc.userData.direction += (Math.random() - .5) * 2.5; }
       npc.rotation.y = npc.userData.direction;
       npc.translateZ(dt * 1.2);
+      const dialogueOpen = document.querySelector('#dialogue').classList.contains('visible') && document.querySelector('#speakerName').textContent === npc.userData.name.toUpperCase();
+      animateCharacter(npc, time, 0.35, dialogueOpen);
     });
     for (let i = debris.length - 1; i >= 0; i--) {
       const chunk = debris[i];
@@ -353,6 +480,7 @@
     cameraOffset.applyQuaternion(actor.quaternion);
     camera.position.lerp(actor.position.clone().add(cameraOffset), 1 - Math.pow(0.001, dt));
     camera.lookAt(actor.position.clone().add(new THREE.Vector3(0, activeVehicle ? 3 : 2.8, 0)));
+    updateEffects(dt, time);
     updateNearby(); updateMinimap();
   }
 

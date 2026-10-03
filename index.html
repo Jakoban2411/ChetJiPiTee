@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#090b0f" />
   <title>Havoc City 3D — Open World Playground</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -72,7 +69,8 @@
       <div class="version">ALPHA BUILD // HC-06</div>
     </section>
   </main>
-  <script src="vendor/three.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <!-- Classic local script: also works when index.html is opened directly via file://. -->
+  <script src="vendor/three.min.js"></script>
   <script src="game.js"></script>
 </body>
 </html>
