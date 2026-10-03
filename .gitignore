@@ -1,0 +1,5 @@
+/build/
+/build-game/
+/.cache/
+compile_commands.json
+havoc-city-preview.png
