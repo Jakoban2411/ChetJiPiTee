@@ -30,12 +30,66 @@
   const npcs = [];
   const smokeParticles = [];
   const waterRipples = [];
+  const staticColliders = [];
+  const colliderHelpers = [];
   let started = false;
   let damage = 0;
   let cash = 12840;
   let heat = 0;
   let activeVehicle = null;
   let nearby = null;
+  let cameraYaw = 0;
+  let cameraPitch = 0.42;
+  let physicsAccumulator = 0;
+  const FIXED_STEP = 1 / 60;
+
+  // Deterministic fixed-step physics. Gameplay collision never depends on frame rate.
+  const physics = {
+    gravity: -30,
+    addBox(object, halfX, halfZ, destructible = null) {
+      const collider = { object, halfX, halfZ, destructible, enabled: true };
+      staticColliders.push(collider);
+      const helper = new THREE.Box3Helper(new THREE.Box3(), 0x42e8ff);
+      helper.visible = false; helper.material.transparent = true; helper.material.opacity = .45;
+      collider.helper = helper; colliderHelpers.push(helper); scene.add(helper);
+      return collider;
+    },
+    sync(collider) {
+      const p = collider.object.position;
+      collider.minX = p.x - collider.halfX; collider.maxX = p.x + collider.halfX;
+      collider.minZ = p.z - collider.halfZ; collider.maxZ = p.z + collider.halfZ;
+      collider.helper.box.min.set(collider.minX, 0, collider.minZ);
+      collider.helper.box.max.set(collider.maxX, collider.destructible?.userData.height || 5, collider.maxZ);
+    },
+    resolveCircle(body, radius) {
+      let hit = null;
+      for (const collider of staticColliders) {
+        if (!collider.enabled || collider.destructible?.visible === false) continue;
+        const closestX = THREE.MathUtils.clamp(body.position.x, collider.minX, collider.maxX);
+        const closestZ = THREE.MathUtils.clamp(body.position.z, collider.minZ, collider.maxZ);
+        let dx = body.position.x - closestX, dz = body.position.z - closestZ;
+        const distanceSq = dx * dx + dz * dz;
+        if (distanceSq >= radius * radius) continue;
+        let distance = Math.sqrt(distanceSq);
+        if (distance < .0001) {
+          const left = Math.abs(body.position.x - collider.minX), right = Math.abs(collider.maxX - body.position.x);
+          const top = Math.abs(body.position.z - collider.minZ), bottom = Math.abs(collider.maxZ - body.position.z);
+          const edge = Math.min(left, right, top, bottom);
+          if (edge === left) { dx = -1; dz = 0; distance = 1; }
+          else if (edge === right) { dx = 1; dz = 0; distance = 1; }
+          else if (edge === top) { dx = 0; dz = -1; distance = 1; }
+          else { dx = 0; dz = 1; distance = 1; }
+        }
+        const penetration = radius - distance;
+        body.position.x += dx / distance * penetration;
+        body.position.z += dz / distance * penetration;
+        hit = collider;
+      }
+      body.position.x = THREE.MathUtils.clamp(body.position.x, -245 + radius, 245 - radius);
+      body.position.z = THREE.MathUtils.clamp(body.position.z, -195 + radius, 195 - radius);
+      return hit;
+    }
+  };
 
   const mat = (color, roughness = 0.75, metalness = 0.05) =>
     new THREE.MeshStandardMaterial({ color, roughness, metalness });
@@ -135,6 +189,7 @@
     group.userData = { type: 'building', hp: 3, value: 650, width: w, depth: d, height };
     destructibles.push(group);
     scene.add(group);
+    physics.sync(physics.addBox(group, w / 2, d / 2, group));
   });
 
   // Street furniture is also destructible.
@@ -158,6 +213,7 @@
     prop.userData = { type: isTree ? 'tree' : 'crate', hp: 1, value: 125, width: 4, depth: 4, height: isTree ? 10 : 4 };
     destructibles.push(prop);
     scene.add(prop);
+    physics.sync(physics.addBox(prop, isTree ? 1.2 : 2, isTree ? 1.2 : 2, prop));
   }
 
   // Neon storefronts and streetlights add readable nightlife landmarks.
@@ -222,7 +278,7 @@
     }
     group.position.set(x, 0, z);
     group.rotation.y = rotation;
-    group.userData = { name, type, speed: 0, wheels, smokeTimer: 0, maxSpeed: type === 'plane' ? 72 : type === 'skateboard' ? 34 : type === 'bike' ? 52 : 46 };
+    group.userData = { name, type, speed: 0, wheels, smokeTimer: 0, collisionRadius: Math.max(width, length) * .38, maxSpeed: type === 'plane' ? 72 : type === 'skateboard' ? 34 : type === 'bike' ? 52 : 46 };
     vehicles.push(group);
     scene.add(group);
   }
@@ -307,6 +363,8 @@
 
   const player = createCharacter('Player', 0xd9ff43, '#ad6d50', '#15100e', '#334f43');
   player.position.set(-110, 0, 4);
+  player.userData.velocityY = 0;
+  player.userData.grounded = true;
   scene.add(player);
 
   const minimap = document.querySelector('#minimap').getContext('2d');
@@ -340,23 +398,7 @@
     const radius = activeVehicle ? 15 : 7;
     destructibles.forEach(object => {
       if (!object.visible || horizontalDistance(actor, object) > radius) return;
-      object.userData.hp--;
-      if (object.userData.hp > 0) {
-        object.rotation.z += 0.035;
-        return;
-      }
-      object.visible = false;
-      damage += object.userData.value;
-      cash += Math.round(object.userData.value * 0.15);
-      heat = Math.min(5, heat + 1);
-      for (let i = 0; i < 14; i++) {
-        const chunk = box(1 + Math.random() * 2.5, 1 + Math.random() * 2.5, 1 + Math.random() * 2.5, mat(i % 3 ? 0x555a58 : 0xd9ff43));
-        chunk.position.copy(object.position).add(new THREE.Vector3((Math.random() - .5) * object.userData.width, 4 + Math.random() * 8, (Math.random() - .5) * object.userData.depth));
-        chunk.userData.velocity = new THREE.Vector3((Math.random() - .5) * 18, 8 + Math.random() * 15, (Math.random() - .5) * 18);
-        chunk.userData.life = 4;
-        debris.push(chunk); scene.add(chunk);
-      }
-      updateHUD();
+      damageObject(object);
     });
   }
 
@@ -458,40 +500,98 @@
     }
   }
 
+  function simulateActorPhysics(dt, time) {
+    const forwardInput = (keys.w ? 1 : 0) - (keys.s ? 1 : 0);
+    const sideInput = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
+    if (activeVehicle) {
+      const vehicle = activeVehicle;
+      const data = vehicle.userData;
+      data.speed += (forwardInput * (keys.shift ? 46 : 28) - data.speed * 1.3) * dt;
+      data.speed = THREE.MathUtils.clamp(data.speed, -data.maxSpeed * .35, data.maxSpeed);
+      vehicle.rotation.y += -sideInput * dt * 1.65 * (data.speed >= 0 ? 1 : -1);
+      vehicle.translateZ(-data.speed * dt);
+      const airborne = data.type === 'plane' && Math.abs(data.speed) > 38;
+      if (airborne) vehicle.position.y = THREE.MathUtils.lerp(vehicle.position.y, keys.shift ? 34 : 16, dt * 1.2);
+      else if (data.type !== 'plane') vehicle.position.y = 0;
+      if (!airborne) {
+        const collision = physics.resolveCircle(vehicle, data.collisionRadius);
+        const vehicleHit = resolveVehicleCollisions(vehicle, data.collisionRadius);
+        if (collision) {
+          if (Math.abs(data.speed) > 18 && collision.destructible) damageObject(collision.destructible, Math.abs(data.speed) > 34 ? 3 : 1);
+          data.speed *= -.22;
+        }
+        if (vehicleHit) data.speed *= -.35;
+      }
+      data.wheels.forEach((wheel, index) => {
+        wheel.rotation.x -= data.speed * dt * 1.35;
+        if (index < 2 && data.type === 'car') wheel.rotation.y = sideInput * .35;
+      });
+      const propeller = vehicle.getObjectByName('propeller');
+      if (propeller) propeller.rotation.z += dt * (8 + Math.abs(data.speed));
+      emitSmoke(vehicle, dt);
+      return;
+    }
+
+    // Camera-relative movement: A/D strafe rather than rotate, so controls are not tank-style.
+    const cameraForward = new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
+    const cameraRight = new THREE.Vector3(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
+    const movement = cameraForward.multiplyScalar(forwardInput).add(cameraRight.multiplyScalar(sideInput));
+    if (movement.lengthSq()) {
+      movement.normalize();
+      player.position.addScaledVector(movement, dt * (keys.shift ? 28 : 17));
+      player.rotation.y = Math.atan2(-movement.x, -movement.z);
+    }
+    physics.resolveCircle(player, 1.05);
+    resolveVehicleCollisions(player, 1.05);
+    player.userData.velocityY += physics.gravity * dt;
+    player.position.y += player.userData.velocityY * dt;
+    if (player.position.y <= 0) { player.position.y = 0; player.userData.velocityY = 0; player.userData.grounded = true; }
+    animateCharacter(player, time, movement.lengthSq() ? 1 : 0);
+  }
+
+  function resolveVehicleCollisions(actor, radius) {
+    let collided = false;
+    vehicles.forEach(vehicle => {
+      if (vehicle === actor || vehicle.position.y > 4) return;
+      const otherRadius = vehicle.userData.collisionRadius;
+      let dx = actor.position.x - vehicle.position.x, dz = actor.position.z - vehicle.position.z;
+      const minimum = radius + otherRadius;
+      const distance = Math.hypot(dx, dz);
+      if (distance >= minimum) return;
+      if (distance < .001) { dx = 1; dz = 0; }
+      const push = minimum - Math.max(distance, .001);
+      actor.position.x += dx / Math.max(distance, .001) * push;
+      actor.position.z += dz / Math.max(distance, .001) * push;
+      collided = true;
+    });
+    return collided;
+  }
+
+  function damageObject(object, amount = 1) {
+    if (!object?.visible) return;
+    object.userData.hp -= amount;
+    if (object.userData.hp > 0) { object.rotation.z += .035 * amount; return; }
+    object.visible = false;
+    const collider = staticColliders.find(item => item.destructible === object);
+    if (collider) collider.enabled = false;
+    damage += object.userData.value;
+    cash += Math.round(object.userData.value * .15);
+    heat = Math.min(5, heat + 1);
+    for (let i = 0; i < 14; i++) {
+      const chunk = box(1 + Math.random()*2.5, 1 + Math.random()*2.5, 1 + Math.random()*2.5, mat(i%3 ? 0x555a58 : 0xff4f9a));
+      chunk.position.copy(object.position).add(new THREE.Vector3((Math.random()-.5)*object.userData.width, 4+Math.random()*8, (Math.random()-.5)*object.userData.depth));
+      chunk.userData.velocity = new THREE.Vector3((Math.random()-.5)*18, 8+Math.random()*15, (Math.random()-.5)*18);
+      chunk.userData.life = 4; debris.push(chunk); scene.add(chunk);
+    }
+    updateHUD();
+  }
+
   function update(dt) {
     if (!started) return;
     const time = clock.elapsedTime;
-    const forward = (keys.w ? 1 : 0) - (keys.s ? 1 : 0);
-    const turn = (keys.a ? 1 : 0) - (keys.d ? 1 : 0);
-    let actor = player;
-    if (activeVehicle) {
-      actor = activeVehicle;
-      const data = actor.userData;
-      data.speed += (forward * (keys.shift ? 46 : 28) - data.speed * 1.3) * dt;
-      data.speed = THREE.MathUtils.clamp(data.speed, -data.maxSpeed * .35, data.maxSpeed);
-      actor.rotation.y += turn * dt * 1.65 * (data.speed >= 0 ? 1 : -1);
-      actor.translateZ(-data.speed * dt);
-      data.wheels.forEach((wheel, index) => {
-        wheel.rotation.x -= data.speed * dt * 1.35;
-        if (index < 2 && data.type === 'car') wheel.rotation.y = -turn * .35;
-      });
-      const propeller = actor.getObjectByName('propeller');
-      if (propeller) propeller.rotation.z += dt * (8 + Math.abs(data.speed));
-      emitSmoke(actor, dt);
-      if (data.type === 'plane' && Math.abs(data.speed) > 38) actor.position.y = THREE.MathUtils.lerp(actor.position.y, keys.shift ? 34 : 16, dt * 1.2);
-      else if (data.type !== 'plane') actor.position.y = 0;
-    } else {
-      const sideways = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
-      const move = new THREE.Vector3(sideways, 0, -forward);
-      if (move.lengthSq()) {
-        move.normalize();
-        player.position.addScaledVector(move, dt * (keys.shift ? 28 : 17));
-        player.rotation.y = Math.atan2(-move.x, -move.z);
-      }
-      animateCharacter(player, time, move.lengthSq() ? 1 : 0);
-    }
-    actor.position.x = THREE.MathUtils.clamp(actor.position.x, -245, 245);
-    actor.position.z = THREE.MathUtils.clamp(actor.position.z, -195, 195);
+    physicsAccumulator = Math.min(physicsAccumulator + dt, FIXED_STEP * 4);
+    while (physicsAccumulator >= FIXED_STEP) { simulateActorPhysics(FIXED_STEP, time); physicsAccumulator -= FIXED_STEP; }
+    const actor = activeVehicle || player;
 
     npcs.forEach(npc => {
       npc.userData.timer -= dt;
@@ -511,8 +611,8 @@
       if (chunk.userData.life < 0) { scene.remove(chunk); debris.splice(i, 1); }
     }
 
-    const cameraOffset = activeVehicle && activeVehicle.userData.type === 'plane' ? new THREE.Vector3(0, 22, 37) : new THREE.Vector3(0, 15, 24);
-    cameraOffset.applyQuaternion(actor.quaternion);
+    const distance = activeVehicle && activeVehicle.userData.type === 'plane' ? 37 : 24;
+    const cameraOffset = new THREE.Vector3(Math.sin(cameraYaw) * distance * Math.cos(cameraPitch), distance * Math.sin(cameraPitch), Math.cos(cameraYaw) * distance * Math.cos(cameraPitch));
     camera.position.lerp(actor.position.clone().add(cameraOffset), 1 - Math.pow(0.001, dt));
     camera.lookAt(actor.position.clone().add(new THREE.Vector3(0, activeVehicle ? 3 : 2.8, 0)));
     updateEffects(dt, time);
@@ -522,14 +622,27 @@
   addEventListener('keydown', event => {
     keys[event.key.toLowerCase()] = true;
     if (event.key.toLowerCase() === 'e' && !event.repeat) interact();
-    if (event.code === 'Space' && !event.repeat) { event.preventDefault(); destroyNearby(); }
+    if (event.key.toLowerCase() === 'f' && !event.repeat) destroyNearby();
+    if (event.key.toLowerCase() === 'h' && !event.repeat) colliderHelpers.forEach(helper => { helper.visible = !helper.visible; });
+    if (event.code === 'Space' && !event.repeat && !activeVehicle && player.userData.grounded) {
+      event.preventDefault(); player.userData.velocityY = 12; player.userData.grounded = false;
+    }
   });
   addEventListener('keyup', event => { keys[event.key.toLowerCase()] = false; });
+  addEventListener('mousemove', event => {
+    if (document.pointerLockElement !== canvas) return;
+    cameraYaw -= event.movementX * .0024;
+    cameraPitch = THREE.MathUtils.clamp(cameraPitch - event.movementY * .0018, .15, 1.05);
+  });
+  canvas.addEventListener('mousedown', event => {
+    if (started && document.pointerLockElement !== canvas) canvas.requestPointerLock?.();
+    else if (started && event.button === 0) destroyNearby();
+  });
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight); renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   });
-  document.querySelector('#startBtn').onclick = () => { started = true; document.querySelector('#startScreen').classList.add('hidden'); };
+  document.querySelector('#startBtn').onclick = () => { started = true; document.querySelector('#startScreen').classList.add('hidden'); canvas.requestPointerLock?.(); };
   document.querySelector('#closeDialogue').onclick = () => document.querySelector('#dialogue').classList.remove('visible');
   document.querySelector('#collapseBtn').onclick = event => { const list = document.querySelector('#nearbyList'); list.hidden = !list.hidden; event.currentTarget.textContent = list.hidden ? '+' : '−'; };
   document.querySelector('#soundBtn').onclick = event => { const label = event.currentTarget.querySelector('b'); label.textContent = label.textContent === 'ON' ? 'OFF' : 'ON'; };
