@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#090b0f" />
+  <title>Havoc City 3D — Open World Playground</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main id="app">
+    <canvas id="game" aria-label="Havoc City game world"></canvas>
+
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Havoc City home">
+        <span class="brand-mark">HC</span>
+        <span><strong>HAVOC</strong><em>CITY</em></span>
+      </a>
+      <div class="district"><span class="live-dot"></span><span id="districtName">DOWNTOWN // WEST SIDE</span></div>
+      <div class="player-stats">
+        <div class="cash"><small>CASH</small><b id="cash">$12,840</b></div>
+        <div class="heat" aria-label="Heat level"><small>HEAT</small><span id="heatPips">◇ ◇ ◇ ◇ ◇</span></div>
+      </div>
+    </header>
+
+    <section class="mission-card glass" id="missionCard">
+      <div class="mission-kicker"><span>ACTIVE JOB</span><b>01</b></div>
+      <h1>MAKE SOME NOISE</h1>
+      <p>The city is too quiet. Cause <strong>$3,000</strong> in property damage.</p>
+      <div class="progress"><i id="missionProgress"></i></div>
+      <div class="progress-label"><span>PROPERTY DAMAGE</span><b id="damageValue">$0 / $3,000</b></div>
+    </section>
+
+    <aside class="world-panel glass">
+      <div class="panel-heading"><span>NEARBY</span><button id="collapseBtn" aria-label="Collapse nearby panel">−</button></div>
+      <div id="nearbyList" class="nearby-list"></div>
+    </aside>
+
+    <div class="minimap-shell">
+      <canvas id="minimap" width="220" height="220" aria-label="Minimap"></canvas>
+      <span class="map-n">N</span>
+      <div class="map-caption"><b id="streetName">VICE AVENUE</b><small>DOWNTOWN</small></div>
+    </div>
+
+    <div class="interaction glass" id="interaction">
+      <span class="key">E</span>
+      <div><small id="interactionType">INTERACT</small><b id="interactionText">Talk to Rico</b></div>
+    </div>
+
+    <section class="dialogue glass" id="dialogue" aria-live="polite">
+      <button id="closeDialogue" aria-label="Close dialogue">×</button>
+      <div class="portrait" id="portrait">R</div>
+      <div><small id="speakerRole">STREET MECHANIC</small><h2 id="speakerName">RICO</h2><p id="dialogueText">You look like you could use some wheels. Anything with an engine is yours if you can get to it.</p></div>
+    </section>
+
+    <footer class="controls glass">
+      <div><span><kbd>WASD</kbd> MOVE</span><span><kbd>SHIFT</kbd> SPRINT / BOOST</span><span><kbd>E</kbd> INTERACT / ENTER</span><span><kbd>SPACE</kbd> ACTION</span></div>
+      <button id="soundBtn" aria-label="Toggle sound">SOUND <b>ON</b></button>
+    </footer>
+
+    <section class="start-screen" id="startScreen">
+      <div class="start-content">
+        <p class="eyebrow">A FULLY 3D OPEN-WORLD PLAYGROUND</p>
+        <h1>OWN THE<br><em>CHAOS.</em></h1>
+        <p class="intro">Every ride is yours. Every person has a story.<br>Every wall can come down.</p>
+        <button id="startBtn"><span>ENTER HAVOC CITY</span><b>→</b></button>
+        <div class="feature-row"><span>12 UNIQUE VEHICLES</span><i></i><span>REAL NPC INTERACTIONS</span><i></i><span>3D DESTRUCTION</span></div>
+      </div>
+      <div class="version">ALPHA BUILD // HC-06</div>
+    </section>
+  </main>
+  <!-- Classic local script: also works when index.html is opened directly via file://. -->
+  <script src="vendor/three.min.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
