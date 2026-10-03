@@ -9,8 +9,8 @@
 
   const canvas = document.querySelector('#game');
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x99b8c8);
-  scene.fog = new THREE.FogExp2(0x99b8c8, 0.0027);
+  scene.background = new THREE.Color(0xf2a07c);
+  scene.fog = new THREE.FogExp2(0xd99086, 0.00225);
 
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -46,15 +46,31 @@
     return mesh;
   };
 
-  scene.add(new THREE.HemisphereLight(0xcde9ff, 0x48533a, 2.25));
-  const sun = new THREE.DirectionalLight(0xfff0d0, 4.2);
-  sun.position.set(-130, 210, 80);
+  scene.add(new THREE.HemisphereLight(0xffcdb8, 0x304968, 2.4));
+  const sun = new THREE.DirectionalLight(0xffc58f, 4.8);
+  sun.position.set(-170, 125, -120);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.left = sun.shadow.camera.bottom = -260;
   sun.shadow.camera.right = sun.shadow.camera.top = 260;
   sun.shadow.camera.far = 650;
   scene.add(sun);
+
+  // A warm coastal sky gives the city the saturated, cinematic Florida atmosphere
+  // used by the visual reference without copying any branded art or assets.
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(650, 32, 18),
+    new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      uniforms: { topColor: { value: new THREE.Color(0x557ab4) }, horizonColor: { value: new THREE.Color(0xff947d) }, bottomColor: { value: new THREE.Color(0x3d5572) } },
+      vertexShader: 'varying vec3 worldPos; void main(){ worldPos=(modelMatrix*vec4(position,1.0)).xyz; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+      fragmentShader: 'uniform vec3 topColor; uniform vec3 horizonColor; uniform vec3 bottomColor; varying vec3 worldPos; void main(){ float h=normalize(worldPos).y; vec3 c=mix(horizonColor,topColor,smoothstep(0.0,.58,h)); c=mix(bottomColor,c,smoothstep(-.35,.05,h)); gl_FragColor=vec4(c,1.0); }'
+    })
+  );
+  scene.add(sky);
+  const sunDisc = new THREE.Mesh(new THREE.SphereGeometry(12, 20, 12), new THREE.MeshBasicMaterial({ color: 0xffd2a1, fog: false }));
+  sunDisc.position.set(-260, 90, -320);
+  scene.add(sunDisc);
 
   const ground = box(500, 2, 400, mat(0x35443c));
   ground.position.y = -1;
@@ -126,13 +142,13 @@
     const isTree = i % 3 === 0;
     const prop = new THREE.Group();
     if (isTree) {
-      const trunk = box(1.3, 7, 1.3, mat(0x65452e));
-      trunk.position.y = 3.5;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(.55, .9, 11, 8), mat(0x70452d));
+      trunk.position.y = 5.5; trunk.rotation.z = (i % 2 ? 1 : -1) * .055; trunk.castShadow = true;
       prop.add(trunk);
-      const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(4.2, 1), mat(0x315f3e));
-      crown.position.y = 9;
-      crown.castShadow = true;
-      prop.add(crown);
+      for (let leaf = 0; leaf < 8; leaf++) {
+        const frond = new THREE.Mesh(new THREE.ConeGeometry(1.05, 8.5, 5), mat(leaf % 2 ? 0x287345 : 0x36965c));
+        frond.position.y = 11; frond.rotation.z = Math.PI / 2.7; frond.rotation.y = leaf * Math.PI / 4; frond.translateY(2.7); frond.castShadow = true; prop.add(frond);
+      }
     } else {
       const crate = box(4, 4, 4, mat(0x9e6438));
       crate.position.y = 2;
@@ -142,6 +158,25 @@
     prop.userData = { type: isTree ? 'tree' : 'crate', hp: 1, value: 125, width: 4, depth: 4, height: isTree ? 10 : 4 };
     destructibles.push(prop);
     scene.add(prop);
+  }
+
+  // Neon storefronts and streetlights add readable nightlife landmarks.
+  const neonColors = [0xff4f9a, 0x4de9ff, 0xffb347, 0xbaff56];
+  buildingLots.forEach(([x, z, w, d], index) => {
+    if (index % 2) return;
+    const signMaterial = new THREE.MeshStandardMaterial({ color: neonColors[index % neonColors.length], emissive: neonColors[index % neonColors.length], emissiveIntensity: 3 });
+    const sign = box(Math.min(w * .58, 25), 3.2, .35, signMaterial);
+    sign.position.set(x, 6 + index % 4, z + d / 2 + .5);
+    scene.add(sign);
+  });
+  for (let z = -150; z <= 150; z += 50) {
+    [-166, 36, 164].forEach(x => {
+      const lamp = new THREE.Group();
+      const pole = box(.35, 9, .35, mat(0x222a32, .4, .75)); pole.position.y = 4.5; lamp.add(pole);
+      if (x === 36) { const bulb = new THREE.PointLight(0xffb6d7, 10, 22, 2); bulb.position.y = 9; lamp.add(bulb); }
+      const globe = new THREE.Mesh(new THREE.SphereGeometry(.6, 10, 6), new THREE.MeshBasicMaterial({ color: 0xffd1e4 })); globe.position.y = 9; lamp.add(globe);
+      lamp.position.set(x, 0, z); scene.add(lamp);
+    });
   }
 
   function createVehicle(name, type, color, x, z, rotation = 0) {
